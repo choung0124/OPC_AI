@@ -5,21 +5,25 @@ from langchain.chains import LLMChain
 from langchain.embeddings import HuggingFaceEmbeddings
 from py2neo import Graph
 import numpy as np
-from CustomLibrary.Graph_Queries import (
-    query_direct,
-    query_direct_constituents, 
-    query_between_direct,
-    get_node_labels_dict,
-    get_node_label
-)
-from CustomLibrary.Graph_Utils import (
-    select_paths
-)
 from langchain.prompts import PromptTemplate
 import gc
-from CustomLibrary.OPC_Utils import pubchem_query, similar_pubchem_query
+
+from CustomLibrary.Graph_Queries import (
+    query_direct, 
+    query_between_direct,
+    get_node_labels_dict,
+    )
+from CustomLibrary.Graph_Utils import (
+    select_paths, 
+)
 from CustomLibrary.Custom_Prompts import Graph_Answer_Gen_Template_alpaca
 
+from CustomLibrary.OpenTargets import (
+    query_disease_info,
+    query_drug_info,
+    query_target_info,
+    query_predicted_drug_info
+)
 
 def generate_answer(llm, entities_list, question, start_paths, mid_paths, inter_direct_inter):
     prompt = PromptTemplate(template=Graph_Answer_Gen_Template_alpaca, input_variables=["input", "question"])
@@ -35,7 +39,8 @@ def generate_answer(llm, entities_list, question, start_paths, mid_paths, inter_
     print(answer)
     return answer
 
-class OPC_GraphQA:
+
+class OpenTargetsGraphQA:
     def __init__(self, uri, username, password, llm, entities_list, constituents_dict, constituents_paths):
         self.graph = Graph(uri, auth=(username, password))
         self.llm = llm
@@ -43,91 +48,49 @@ class OPC_GraphQA:
         self.constituents_dict = constituents_dict
         self.constituents_paths = constituents_paths
 
-        print("entities_list")
-        print(self.entities_list)
-        print("constituents_dict")
-        print(self.constituents_dict)
-
     def _call(self, question, progress_callback=None):
         start_paths = []
         start_nodes = []
         start_graph_rels = []
 
         for entity in self.entities_list:
-            entity_label, entity_name = get_node_label(self.graph, entity)
-            paths = query_direct(self.graph, entity_name, entity_label)
-            if paths:
-                (CKG_paths,
-                CKG_nodes, 
-                CKG_rels) = select_paths(paths, 
-                                            question, 
-                                            len(paths)//3, 
-                                            3, 
-                                            progress_callback)
-                start_paths.extend(CKG_paths)
-                start_nodes.extend(CKG_nodes)
-                start_graph_rels.extend(CKG_rels)
+            entity_name, entity_type = entity
+            if entity_type == "Disease":
+                result = query_disease_info(entity_name, question)
+            elif entity_type == "Drug" or "Food" or "Metabolite":
+                result = query_drug_info(entity_name, question)
+            elif entity_type == "Gene":
+                result = query_target_info(entity_name, question)
+
+            if result is not None:
+                OT_paths, OT_nodes, OT_graph_rels = result
+                start_paths.extend(OT_paths)
+                start_nodes.extend(OT_nodes)
+                start_graph_rels.extend(OT_graph_rels)
 
             if entity in self.constituents_dict and self.constituents_dict[entity]:
                 constituents = self.constituents_dict[entity]
                 constituents = [constituent for constituent in constituents if constituent != 'None']
-                if constituents and 'None' not in constituents:  
-
+                if constituents and 'None' not in constituents:
                     for constituent in constituents:
-                        constituent_label, constituent_name = get_node_label(self.graph, constituent)
-                        paths = query_direct_constituents(self.graph, constituent_name, constituent_label)
-                        
-                        if paths:
-                            if len(paths)//3 < 1:
-                                n_cluster = 1
-                            else:
-                                n_cluster = len(paths)//3
-                            (Constituent_CKG_paths,
-                            Constituent_CKG_nodes, 
-                            Constituent_CKG_rels) = select_paths(paths, 
-                                                            question, 
-                                                            n_cluster, 
-                                                            3, 
-                                                            progress_callback)
+                        constituent_name, constituent_type = constituent
+                        if constituent_type == "Disease":
+                            result = query_disease_info(constituent_name, question)
+                        elif constituent_type == "Drug" or "Food" or "Metabolite":
+                            result = query_drug_info(constituent_name, question)
+                        elif constituent_type == "Gene":
+                            result = query_target_info(constituent_name, question)
 
-                            start_paths.extend(Constituent_CKG_paths)
-                            start_nodes.extend(Constituent_CKG_nodes)
-                            start_graph_rels.extend(Constituent_CKG_rels)
+                        if result is not None:
+                            (Constituent_OT_Paths,
+                            Constituent_OT_Nodes, 
+                            Constituent_OT_Rels) = result
 
-                        pubchem_result = pubchem_query(entity, 
-                                                constituent, 
-                                                question, 
-                                                progress_callback)
-                        
-                        if pubchem_result:
-                            (pubchem_paths, 
-                            pubchem_nodes, 
-                            pubchem_rels) = pubchem_result
-
-                            start_paths.extend(pubchem_paths)
-                            start_nodes.extend(pubchem_nodes)
-                            start_graph_rels.extend(pubchem_rels)
-                        
-                        similar_pubchem_result = similar_pubchem_query(entity,
-                                                                        constituent,
-                                                                        question,
-                                                                        progress_callback)
-
-                        if similar_pubchem_result:
-                            (similar_pubchem_paths, 
-                            similar_pubchem_nodes, 
-                            similar_pubchem_rels) = similar_pubchem_result
-
-                            start_paths.extend(similar_pubchem_paths)
-                            start_nodes.extend(similar_pubchem_nodes)
-                            start_graph_rels.extend(similar_pubchem_rels)
-                else:   
+                            start_paths.extend(Constituent_OT_Paths)
+                            start_nodes.extend(Constituent_OT_Nodes)
+                            start_graph_rels.extend(Constituent_OT_Rels)
+                else:
                     continue
-            else:
-                continue
-
-        if len(start_paths) == 0:
-            return None
 
         print("start_paths:", len(start_paths))
         print("start_nodes:", len(start_nodes))
@@ -203,9 +166,8 @@ class OPC_GraphQA:
         all_graph_rels = list(all_graph_rels)
         print("all_graph_rels")
         print(len(all_graph_rels))
-
 ########################################################################################################
-        
+             
         params = {
             "llm": self.llm,
             "entities_list": self.entities_list,
@@ -223,5 +185,3 @@ class OPC_GraphQA:
                     "all_rels": all_graph_rels}
                 
         return response
-
-

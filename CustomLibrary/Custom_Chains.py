@@ -6,6 +6,7 @@ import re
 from langchain.schema import AgentAction, AgentFinish, OutputParserException
 from langchain.chains import LLMChain
 import json
+import ast
 
 class CustomLLMChain(LLMChain):
     def run(self, query: str, *args, **kwargs) -> Dict[str, Any]:
@@ -21,10 +22,16 @@ def parse_llm_output(output: str) -> list:
     if entities_match:
         entities = entities_match.group(1)
         # Parse the entities with json.loads
-        entities = json.loads(entities)
+        try:
+            entities = json.loads(entities)
+        except json.JSONDecodeError as e:
+            try:
+                entities = ast.literal_eval(entities)
+            except: 
+                print(f"Error parsing entities: {e}")
+                return []
+
         return entities
-    else:
-        return []
     
 class CustomLLMChainAdditionalEntities(LLMChain):
     def run(self, *args, query: str = "", **kwargs) -> Dict[str, Any]:

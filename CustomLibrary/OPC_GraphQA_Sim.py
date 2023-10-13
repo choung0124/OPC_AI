@@ -35,18 +35,13 @@ def generate_answer(llm, entities_list, question, start_paths, mid_paths, inter_
     print(answer)
     return answer
 
-class OPC_GraphQA:
+class OPC_GraphQA_Sim:
     def __init__(self, uri, username, password, llm, entities_list, constituents_dict, constituents_paths):
         self.graph = Graph(uri, auth=(username, password))
         self.llm = llm
         self.entities_list = entities_list
         self.constituents_dict = constituents_dict
         self.constituents_paths = constituents_paths
-
-        print("entities_list")
-        print(self.entities_list)
-        print("constituents_dict")
-        print(self.constituents_dict)
 
     def _call(self, question, progress_callback=None):
         start_paths = []
@@ -78,15 +73,12 @@ class OPC_GraphQA:
                         paths = query_direct_constituents(self.graph, constituent_name, constituent_label)
                         
                         if paths:
-                            if len(paths)//3 < 1:
-                                n_cluster = 1
-                            else:
-                                n_cluster = len(paths)//3
                             (Constituent_CKG_paths,
                             Constituent_CKG_nodes, 
-                            Constituent_CKG_rels) = select_paths(paths, 
+                            Constituent_CKG_rels) = select_paths(entity,
+                                                            paths, 
                                                             question, 
-                                                            n_cluster, 
+                                                            len(paths)//3, 
                                                             3, 
                                                             progress_callback)
 

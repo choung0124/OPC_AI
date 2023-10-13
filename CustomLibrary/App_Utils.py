@@ -9,6 +9,7 @@ import colour
 import json
 from Bio import Entrez
 import time
+import requests
 
 def get_umls_id(search_string: str) -> list:
     api_key = "7cc294c9-98ed-486b-add8-a60bd53de1c6"
@@ -192,8 +193,8 @@ def create_and_display_network(nodes, edges, back_color, name, source, target):
                 {html_string}
             </div>
             """, 
-            width=1050, 
-            height=750
+            width=630, 
+            height=630
         )
 
     # Add a button to open the network in full size in a new tab
@@ -234,3 +235,15 @@ def search_pubmed(query):
     for i, paper in enumerate(papers['PubmedArticle']):
         return "https://pubmed.ncbi.nlm.nih.gov/{}".format(id_list[0])
 
+def create_docs_from_results(results):
+    # Flatten the lists
+    documents = [doc for sublist in results["documents"] for doc in sublist]
+    metadatas = [meta for sublist in results["metadatas"] for meta in sublist]
+
+    # Create the list of dictionaries
+    docs = []
+    for document, metadata in zip(documents, metadatas):
+        doc = {"document": document, "metadata": metadata}
+        docs.append(doc)
+
+    return docs

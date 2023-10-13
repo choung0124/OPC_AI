@@ -12,7 +12,7 @@ from selenium.common.exceptions import NoSuchElementException
 from selenium.common.exceptions import TimeoutException
 import glob
 import os
-from CustomLibrary.Graph_Utils import select_paths2
+from CustomLibrary.Graph_Utils import select_paths
 
 base_url = "https://www.google.com/search?q="
 
@@ -35,7 +35,7 @@ def get_url(drug_name):
 
     href = a.get('href')
 
-    if href is None:
+    if href is None or '/url?q=' not in href:
         print(f"No href found for {drug_name}")
         return None
 
@@ -49,6 +49,9 @@ def get_similar_compounds(drug_name, top_n):
     # Get CID of the drug from PubChem
     pubchem_cid_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{drug_name}/cids/JSON"
     response = requests.get(pubchem_cid_url)
+    if 'IdentifierList' not in response.json():
+        print(f"No CID found for {drug_name}")
+        return None
     cid = response.json()['IdentifierList']['CID'][0]
 
     # Get canonical SMILES of the drug from PubChem
@@ -69,10 +72,28 @@ def get_similar_compounds(drug_name, top_n):
     return similar_compounds[1:top_n + 1]
 
 
+def download_wait(directory, timeout, nfiles=None):
+    seconds = 0
+    dl_wait = True
+    while dl_wait and seconds < timeout:
+        time.sleep(1)
+        dl_wait = False
+        files = os.listdir(directory)
+        if nfiles and len(files) != nfiles:
+            dl_wait = True
+
+        for fname in files:
+            if fname.endswith('.crdownload'):
+                dl_wait = True
+
+        seconds += 1
+    return seconds
+
 def download_pubchem(drug_name):
     chrome_options = webdriver.ChromeOptions()
-    prefs = {'download.default_directory' : '/mnt/c/ari_chain'}
+    prefs = {'download.default_directory' : '/mnt/c/aribio/OPC_BRAIN'}
     chrome_options.add_experimental_option('prefs', prefs)
+    chrome_options.add_argument('--headless')
     driver = webdriver.Chrome(options=chrome_options)
 
     url = get_url(drug_name)
@@ -80,7 +101,12 @@ def download_pubchem(drug_name):
         print(f"No URL found for {drug_name}")
         return None
 
-    driver.get(url)
+    try:
+        driver.set_page_load_timeout(60)  # set timeout to 60 seconds
+        driver.get(url)
+    except TimeoutException:
+        print(f"Timeout while trying to access {url}")
+        return None
 
     try:
         wait = WebDriverWait(driver, 30)
@@ -93,13 +119,11 @@ def download_pubchem(drug_name):
         csv_download_link.click()
 
         # Add delay to allow download to finish
-        time.sleep(10)
+        download_wait("/mnt/c/aribio/OPC_BRAIN", 300)
 
-        # Assuming the downloaded file has a .csv extension and its name starts with 'pubchem_cid'
         # Change the file name pattern based on your actual downloaded file name
-        downloaded_file = glob.glob('/mnt/c/ari_chain/pubchem_cid*.csv')[0]
+        downloaded_file = glob.glob('/mnt/c/aribio/OPC_BRAIN/pubchem_cid*.csv')[0]
         
-        # Read the CSV file into a pandas DataFrame
         # Read the CSV file into a pandas DataFrame
         df = pd.read_csv(downloaded_file)
 
@@ -142,12 +166,25 @@ def pubchem_query(entity, string, question, progress_callback=None):
         path_dict['relationships'] = ["contains constituent", row['action']]
         path_list.append(path_dict)
 
-    selected_paths, selected_nodes, selected_rels = select_paths2(path_list, question, max(len(path_list)//3, 1), max(len(path_list)//3, 1), progress_callback)
+    max_paths = 10
+
+    if max(len(path_list)//3, 1) > max_paths:
+        n_cluster = max_paths
+        n_embed = max_paths
+    else:
+        n_cluster = max(len(path_list)//3, 1)
+        n_embed = max(len(path_list)//3, 1)
+
+    selected_paths, selected_nodes, selected_rels = select_paths(path_list, question, n_cluster, n_embed, progress_callback)
 
     return selected_paths, selected_nodes, selected_rels
 
 def similar_pubchem_query(entity, string, question, progress_callback=None):
     similar_compounds = get_similar_compounds(string, 100)
+    if similar_compounds is None:
+        print(f"No similar compounds found for {string}")
+        return None
+        
     paths = []
     nodes = []
     rels = []
@@ -166,7 +203,18 @@ def similar_pubchem_query(entity, string, question, progress_callback=None):
                 path_dict['nodes'] = [entity, compound, row['cmpdname'], row['genename']]
                 path_dict['relationships'] = ["contains constituent", "is similar to", row['action']]
                 path_list.append(path_dict)
-            selected_paths, selected_nodes, selected_rels = select_paths2(path_list, question, max(len(path_list)//3, 1), max(len(path_list)//3, 1), progress_callback)
+
+            max_paths = 10
+
+            if max(len(path_list)//3, 1) > max_paths:
+                n_cluster = max_paths
+                n_embed = max_paths
+            else:
+                n_cluster = max(len(path_list)//3, 1)
+                n_embed = max(len(path_list)//3, 1)
+
+            selected_paths, selected_nodes, selected_rels = select_paths(path_list, question, n_cluster, n_embed, progress_callback)
+
             paths.extend(selected_paths)
             nodes.extend(selected_nodes)
             rels.extend(selected_rels)
