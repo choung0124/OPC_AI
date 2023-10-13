@@ -25,13 +25,16 @@ from CustomLibrary.App_Utils import(
 from itertools import combinations, product
 from langchain.embeddings import HuggingFaceEmbeddings
 from CustomLibrary.OPC_GraphQA import OPC_GraphQA
+from CustomLibrary.Pharos_Graph_QA import PharosGraphQA
+from CustomLibrary.OpenTargets_Graph_QA import OpenTargetsGraphQA
+from CustomLibrary.Predicted_QA import PredictedGrqphQA
 from chromadb.utils import embedding_functions
 import chromadb
 import ast
 import re
-
-# What kind of interactions could there be between the three drugs: lamotrigine, aripiprazole and methylphenidate?
 # Could there be a synergistic interaction between the three drugs: lamotrigine, aripiprazole and methylphenidate for bipolar disorder?
+# What kind of interactions could there be between the three drugs: lamotrigine, aripiprazole and methylphenidate?
+# Could there be a synergistic interaction between the three drugs: lamotrigine, aripiprazole and methylphenidate?
 # could there be a synergistic interaction between peanut sprouts and ashwagandha?
 # Could there be a synergistic interaction between sildenafil and ashwagandha to treat alzheimer's?
 #Withaferin A, Withanolide A, Withanolide B, Withanolide C, Withanolide D, Withanone, Withanoside IV, Withanoside V
@@ -86,6 +89,11 @@ def initialize_all(state):
         Entity_type_prompt = PromptTemplate(template=OPC_Entity_type_Template, input_variables=["input"])        
         state.Entity_type_chain = LLMChain(prompt=Entity_type_prompt, llm=state.llm)
         state.initialized = True
+
+class EntityCombination:
+    def __init__(self, entity_name, entity_type):
+        self.entityname = entity_name
+        self.entitytype = entity_type
 
 # Get the state
 state = get_state(user_options=[])
@@ -189,8 +197,8 @@ if st.session_state.counter == len(st.session_state.entities_list):
             with st.expander(f"Constituents of {entity}"):
                 st.write(constituents)
 
-    if st.button("Run GraphQA"):
-        with st.spinner("Running GraphQA..."):
+    if st.button("Run OPC GraphQA"):
+        with st.spinner("Running OPC GraphQA..."):
             # Assuming 'entities_list' is a list of all entities
             entities_list = st.session_state.entities_list
 
@@ -214,10 +222,13 @@ if st.session_state.counter == len(st.session_state.entities_list):
                     entity_combinations[entity] = combinations_of_constituents
                 
                 else:
-                    entity_combinations[entity] = [[entity]]
+                    entity_combinations[entity] = [entity]
 
             # Generate all combinations of combinations for each entity
             all_combinations = list(product(*entity_combinations.values()))
+            print("entity_combinations")
+            print(entity_combinations.keys())
+            print(all_combinations)
 
             st.write("All combinations:")
             st.write(len(all_combinations))
@@ -254,7 +265,8 @@ if st.session_state.counter == len(st.session_state.entities_list):
                 for i, entity in enumerate(entity_combinations.keys()):
                     if entity in st.session_state.constituents_dict and st.session_state.constituents_dict[entity]:
                         constituents_dict[entity] = list(combo[i])
-                
+
+
                 # Run OPC GraphQA for each combination
                 KG = OPC_GraphQA(uri=state.uri, 
                                 username=state.username, 
@@ -274,6 +286,66 @@ if st.session_state.counter == len(st.session_state.entities_list):
                                 metadatas=[{"Entities" : str(list(entity_combinations.keys())),
                                             "Graph_rels": str(all_rels)}])
 
+                pharos_answer_id = str(answer_count + 2)
+
+                PHAROS_KG = PharosGraphQA(uri=state.uri,
+                                            username=state.username,
+                                            password=state.password,
+                                            llm=state.local_llm,
+                                            entities_list=entities_list,
+                                            constituents_dict=constituents_dict,
+                                            constituents_paths=st.session_state.paths_list)
+
+                pharos_graph_query = PHAROS_KG._call(question, progress_callback=progress_callback)
+                if pharos_graph_query is not None and pharos_graph_query['result'] is not None:
+                    pharos_answer = pharos_graph_query['result']
+                    pharos_all_rels = pharos_graph_query['all_rels']
+
+                    vectordb.add(ids=[pharos_answer_id],
+                                documents=[pharos_answer],
+                                metadatas=[{"Entities" : str(list(entity_combinations.keys())),
+                                            "Graph_rels": str(pharos_all_rels)}])
+
+                open_targets_answer_id = str(answer_count + 3)
+
+                OpenTargets_KG = OpenTargetsGraphQA(uri=state.uri,
+                                            username=state.username,
+                                            password=state.password,
+                                            llm=state.local_llm,
+                                            entities_list=entities_list,
+                                            constituents_dict=constituents_dict,
+                                            constituents_paths=st.session_state.paths_list)
+
+                open_targets_graph_query = OpenTargets_KG._call(question, progress_callback=progress_callback)
+                if open_targets_graph_query is not None and open_targets_graph_query['result'] is not None:
+                    open_targets_answer = open_targets_graph_query['result']
+                    open_targets_all_rels = open_targets_graph_query['all_rels']
+
+                    vectordb.add(ids=[open_targets_answer_id],
+                                documents=[open_targets_answer],
+                                metadatas=[{"Entities" : str(list(entity_combinations.keys())),
+                                            "Graph_rels": str(open_targets_all_rels)}])
+
+                predicted_answer_id = str(answer_count + 4)
+
+                Predicted_KG = PredictedGraphQA(uri=state.uri,
+                                            username=state.username,
+                                            password=state.password,
+                                            llm=state.local_llm,
+                                            entities_list=entities_list,
+                                            constituents_dict=constituents_dict,
+                                            constituents_paths=st.session_state.paths_list)
+
+                for response in Predicted_KG._call(question, progress_callback=progress_callback):
+                    if response is not None and response['result'] is not None:
+                        predicted_answer = response['result']
+                        predicted_all_rels = response['all_rels']
+
+                        vectordb.add(ids=[predicted_answer_id],
+                                    documents=[predicted_answer],
+                                    metadatas=[{"Entities" : str(list(entity_combinations.keys())),
+                                                "Graph_rels": str(predicted_all_rels)}])
+                    
                 else:
                     continue
 
@@ -290,7 +362,7 @@ if st.session_state.counter == len(st.session_state.entities_list):
             final_answer = Final_chain.run(input=selected_answers, question=question)
             st.write(final_answer)
 
-            st.header("Evidence:")
+            st.header("Top 4 pieces of evidence:")
             for result in result_dict_list:
                 answer = result["document"]
                 metadata = result["metadata"]
@@ -298,9 +370,9 @@ if st.session_state.counter == len(st.session_state.entities_list):
                 graph_rels_str = metadata["Graph_rels"]
                 graph_rels = ast.literal_eval(graph_rels_str)
 
-                st.write(f"Answer from this combination of entities: {entities_list}")
-                st.write("Answer:")
-                st.write(answer)
-                nodes, edges = parse_relationships_pyvis(graph_rels)
-                create_and_display_network(nodes, edges, '#fff6fe', "Graph", entities_list[0], entities_list[1])
+                with st.expander(f"Answer from this combination of entities: {entities_list}"):
+                    st.header("Answer:")
+                    st.write(answer)
+                    nodes, edges = parse_relationships_pyvis(graph_rels)
+                    create_and_display_network(nodes, edges, '#fff6fe', "Graph", entities_list[0], entities_list[1])
 
